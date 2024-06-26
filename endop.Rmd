@@ -1,0 +1,1065 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidytext)
+library(tidyverse)
+library(lubridate)
+library(anytime)
+library(reshape2)
+dir = "/Users/james/Nextcloud/School/Residency/Clinical_research/Patel/endophthalmitis/"
+data <- read.csv(paste0(dir,"230430_endophthalmitis_datacollection.csv"))
+data = data[!(is.na(data$Name) | data$Name==""),]
+
+
+p_dt = function(d.list){
+  #print(d.list)
+  l=list()
+  for (d in d.list){
+    if (!(is.na(d) | is.double(d))){
+      if (d==""){
+        l=c(l,"None")
+      }else{
+        l=c(l,parse_date_time2(d,"mdy",cutoff_2000=21))
+      }
+    } else{
+      l=c(l,"None")
+    }
+  }
+  return(anytime(as.double(unlist(l))))
+}
+
+convert_dates = function (df, col.list){
+  for (c in col.list){
+    df[c] <- lapply(df[c], function (x) p_dt(x))
+  }
+  return(df)
+}
+date.columns = c("DOB","date.of.procedure.OR", "initial.presentation.date", "date.of.initial.tx", "date.of.secondary.tx", "date")
+data = convert_dates(data,date.columns)
+```
+
+
+Describe the ages of patients
+```{r}
+data$age.at.presentation <- as.integer(data$age.at.presentation)
+d_age = data%>%
+  distinct(Name,.keep_all=T)
+ggplot(d_age,aes(age.at.presentation))+
+  geom_histogram(bins=10)+
+  labs(x = "Age at presentation", y="Count")+
+  theme_minimal(base_size = 14)
+```
+
+Describe when patients presented
+```{r}
+d_hist <- data %>%
+  distinct(Name,.keep_all=T)%>%
+  filter(!is.na(initial.presentation.date))%>%
+  select(initial.presentation.date)
+hist.data = hist(d_hist$initial.presentation.date, breaks="years",freq=T,plot=F)
+hist.data = data.frame("Year"=year(hist.data$breaks)[-1],"Count"=hist.data$counts)
+
+ggplot(hist.data,aes(x=Year,y=Count))+
+  geom_bar(stat="Identity")+
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+```
+
+Describe patients by their sex
+```{r}
+d_sex <- data %>% 
+  distinct(Name,.keep_all=T)  %>%
+  group_by(Gender.1.M..2.F) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = count/sum(count)) %>%
+  mutate(Gender=fct_reorder(factor(Gender.1.M..2.F),perc, .desc=T)) 
+levels(d_sex$Gender)=c("Male","Female")
+ggplot(d_sex,aes(Gender,perc,fill=Gender)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Gender")+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14)
+```
+
+Describe patients by their race
+```{r}
+d_race <- data %>% 
+  distinct(Name,.keep_all=T) %>%
+  group_by(Race=Race.0.White..1.Black.African.American..2.Asian..3.American.Indian.or.Alaska.Native..4.Native.Hawaiian.or.Other.Pacific.Islander..5.more.than.one.race..6.Other..7.unknown.not.reported) %>% 
+  summarise(count = n()) %>% 
+  filter(!is.na(Race))%>%
+  mutate(perc = count/sum(count)) %>%
+  mutate(Race=fct_reorder(factor(Race),perc, .desc=T)) 
+levels(d_race$Race)=c("White","Black/African American","Other","Unknown","Asian","Native Hawaiian or Other Pacific Islander","American Indian or Alaskan Native")
+ggplot(d_race,aes(Race,perc,fill=Race)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Race")+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14)+
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+```
+Describe the genus of organisms cultured
+```{r}
+org.names <- c("staph","strep","candida", "fungus", "entero", "propioni", "serratia", "mrsa", "klebs", "coli", "pseudomonas","bacillus","haemoph", "acnes", "yeast", "epi", "mssa")
+org.list <- c("Staphylococcus", "Streptococcus", "Fungus", "Fungus", "Enterobacter", "Cutibacterium", "Serratia", "Staphylococcus", "Klebsiella", "Escherichia", "Pseudomonas", "Bacillus", "Haemophilus", "Cutibacterium", "Fungus","Staphylococcus", "Staphylococcus")
+names(org.list) <- org.names
+get_organism = function(org){
+  org <- tolower(org)
+  if (org==""){
+    return("Unknown")
+  }
+  for (o in org.names){
+    if (grepl(o,org)){
+      return(org.list[o])
+    }
+  }
+  return("Other")
+}
+data$Genus<- unlist(lapply(data[["final.culture.result...organism"]], function (x) get_organism(x)))
+
+#Plot overall data
+d_genus <- data %>% 
+  distinct(Name,.keep_all=T)%>%
+  group_by(Genus) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = count/sum(count)) %>%
+  mutate(Genus=fct_reorder(Genus,perc, .desc=T))
+
+ggplot(d_genus,aes(Genus,perc,fill=Genus)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Genus")+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+```
+
+
+Describe the source of the culture
+```{r}
+d_tap <- data %>%
+  distinct(Name,.keep_all=T)%>%
+  select(source=source.of.culture.1...AC..2...vitreous..3...both,Genus,pos_culture=positive.culture.1..Y..2..N)
+#data$source.of.culture.1...AC..2...vitreous..3...both
+process_source = function(s){
+  s = tolower(s)
+  if ((s=="")){
+    return("None")
+  }else if ((s) =="cornea" | s=="conjunctiva"){
+    return ("Cornea/Conj")
+  }else if(s=="1"){
+    return ("AC")
+  }else if(s=="2"){
+    return ("Vit")
+  }else if(s=="3"|s=="1,2"){
+    return ("AC + Vit")
+  }else{
+    return ("Other")
+  }
+}
+get_pos_culture = function(g,p){
+  print(g,p)
+  return("pos")
+}
+
+pos_culture = function(p){
+  if(p=="Unknown"){
+    return("- Culture")
+  }else{
+    return("+ Culture")
+  }
+}
+
+d_tap$source_proc <- unlist(lapply(d_tap[["source"]], function (x) process_source(x)))  
+d_tap$pos <- unlist(lapply(d_tap[["Genus"]], function (x) pos_culture(x)))  
+d_tap_proc <- d_tap %>%
+  filter(source_proc!="Other" & source_proc!="None")%>%
+  group_by(source_proc,pos)%>%
+  summarise(count=n()) %>%
+  mutate(source_proc=fct_reorder(source_proc,count, .desc=T))
+  
+d_tap_proc$source_proc <-factor(d_tap_proc$source_proc, levels=c("Vit","AC + Vit","AC","Cornea/Conj"))
+d_tap_proc$pos <-factor(d_tap_proc$pos, levels=c("- Culture","+ Culture"))
+
+ggplot(d_tap_proc,aes(x=source_proc,y=count,fill=pos)) + 
+  geom_bar(position="fill",stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Source")+
+  theme_minimal(base_size = 14)+
+  theme(legend.title=element_blank())
+
+d_tap_proc$pos <-factor(d_tap_proc$pos, levels=c("+ Culture","- Culture"))
+
+ggplot(d_tap_proc,aes(x=source_proc,y=count,fill=pos)) + 
+  geom_bar(position="dodge",stat="identity") + 
+  labs(x = "Source",y="Count")+
+  theme_minimal(base_size = 14)+
+  theme(legend.title=element_blank())
+```
+
+Decribe the source of the culture percentage
+```{r}
+d_tap_proc2 <- d_tap %>% 
+  group_by(source_proc,Genus) %>% 
+  summarise(count = n())
+
+d_tap_proc2$source_proc <-factor(d_tap_proc2$source_proc, levels=c("Vit","AC + Vit","AC","Cornea/Conj"))
+d_tap_proc2$Genus <-factor(d_tap_proc2$Genus, levels=rev(c("Unknown","Staphylococcus","Streptococcus","Fungus","Other","Cutibacterium","Bacillus","Serratia","Enterobacter","Haemophilus","Klebsiella"  ,"Pseudomonas","Escherichia" )))
+
+ggplot(d_tap_proc2,aes(x=source_proc,y=count,fill=Genus)) + 
+  geom_bar(position="fill",stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Etiology")+
+  theme_minimal(base_size = 14)
+```
+
+Describe the etiology of endophthalmitis 
+```{r}
+#Plot by etiology
+unique(data[["endogenous...1.post.procedure...2"]])
+data["endogenous...1.post.procedure...2"][data["endogenous...1.post.procedure...2"]=="3"]
+get_etiology = function(e){
+  if (e=="1"){
+    return("Endogenous")
+  }else if (e=="2" | e=="3"){
+    return("Post-Procedure")
+  }else if (e==""){
+    return("Unknown")
+  }
+  return("Other")
+}
+data$Etiology <- unlist(lapply(data[["endogenous...1.post.procedure...2"]], function (x) get_etiology(x)))
+
+d_etiology <- data %>% 
+  distinct(Name,.keep_all=T)%>%
+  group_by(Etiology) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = count/sum(count)) %>%
+  mutate(Etiology=fct_reorder(Etiology,perc, .desc=T))
+
+ggplot(d_etiology,aes(Etiology,perc,fill=Etiology)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Etiology")+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+procedure_list = list(
+  Phaco="1",
+  Tube="2",
+  IVI="3",
+  Other="4"
+)
+
+get_procedure = function(x){
+  if (x==""){
+    return("None")
+  }
+  for (n in names(procedure_list)){
+    if (grepl(procedure_list[[n]],x)){
+      return(n)
+    }else{
+      next
+    }
+  }
+  return("Other")
+}
+
+data$Procedure <- unlist(lapply(data[["procedure.type.1...phaco.2...tube.trab.3...antivegf.injection..3a...avastin..3b...lucentis..3c...eylea..4...other..specify."]], function (x) get_procedure(x)))
+
+d_procedure <- data %>% 
+  distinct(Name,.keep_all=T)%>%
+  select(Name,Etiology,Procedure)%>%
+  filter(Procedure!="None")%>%
+  group_by(Procedure) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = count/sum(count)) %>%
+  mutate(Procedure=fct_reorder(Procedure,perc, .desc=T))
+
+
+
+ggplot(d_procedure,aes(Procedure,perc,fill=Procedure)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14)+
+  labs(x = "Procedure",y="Percentage")
+```
+
+```{r}
+d_hist_ivi <- data %>%
+  distinct(Name,.keep_all=T)%>%
+  filter(!is.na(initial.presentation.date))%>%
+  #filter(Procedure=="IVI")%>%x
+  mutate(year=format(as.Date(initial.presentation.date, format="%d/%m/%Y"),"%Y"))%>%
+  group_by(Procedure)%>%
+  select(initial.presentation.date,Procedure,year,Genus)
+hist.data_ivi = hist(d_hist_ivi$initial.presentation.date, breaks="years",freq=T,plot=F)
+hist.data_ivi = data.frame("Year"=year(hist.data_ivi$breaks)[-1],"Count"=hist.data_ivi$counts)
+
+d_tap_proc2$source_proc <-factor(d_tap_proc2$source_proc, levels=c("Vit tap","AC + Vit tap","AC tap","Cornea/Conj"))
+ggplot(hist.data_ivi,aes(x=Year,y=Count))+
+  geom_bar(stat="Identity")+
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+
+
+d_hist_ivi$Procedure <-factor(d_hist_ivi$Procedure, levels=c("None","Other","Tube","Phaco","IVI"))
+ggplot(d_hist_ivi, aes(x=initial.presentation.date,fill=Procedure))+geom_histogram(bins=16)+ 
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+
+ggplot(d_hist_ivi, aes(x=year,group=Procedure,color=Procedure))+geom_line(stat='count',size = 1.5)+ 
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+
+d_hist_ivi$Genus <-factor(d_hist_ivi$Genus, levels=rev(c("Unknown","Staphylococcus","Streptococcus","Fungus","Other","Cutibacterium","Bacillus","Serratia","Enterobacter","Haemophilus","Klebsiella"  ,"Pseudomonas","Escherichia" )))
+
+d_hist_ivi = d_hist_ivi %>%
+  filter(Genus!="Unknown")
+
+ggplot(d_hist_ivi, aes(x=year,group=Genus,color=Genus))+geom_line(stat='count',size = 1.5)+ 
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+
+
+```
+
+
+Describe the genus of microorgnaisms grown by procedure
+```{r}
+d_etiology_grouped <- data %>% 
+  distinct(Name,.keep_all=T)%>%
+  select(Name,Genus,Etiology,procedure_code=procedure.type.1...phaco.2...tube.trab.3...antivegf.injection..3a...avastin..3b...lucentis..3c...eylea..4...other..specify.)%>%
+  mutate(Procedure=unlist(lapply(procedure_code, get_procedure)))%>%
+  group_by(Etiology,Genus) %>% 
+  summarise(count = n())# %>% 
+  #mutate(perc = count/sum(count)) %>%
+  #mutate(Genus=fct_reorder(Genus,perc, .desc=T)) 
+d_etiology_grouped$Etiology <-factor(d_etiology_grouped$Etiology, levels=c("Post-Procedure","Endogenous","Unknown","Other"))
+d_etiology_grouped$Genus <-factor(d_etiology_grouped$Genus, levels=rev(c("Unknown","Staphylococcus","Streptococcus","Fungus","Other","Cutibacterium","Bacillus","Serratia","Enterobacter","Haemophilus","Klebsiella"  ,"Pseudomonas","Escherichia" )))
+
+ggplot(d_etiology_grouped,aes(x=Etiology,y=count,fill=Genus)) + 
+  geom_bar(position="fill",stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Etiology")+
+  theme_minimal(base_size = 14)
+
+d_etiology_grouped <- data %>% 
+  distinct(Name,.keep_all=T)%>%
+  select(Name,Genus,Etiology,procedure_code=procedure.type.1...phaco.2...tube.trab.3...antivegf.injection..3a...avastin..3b...lucentis..3c...eylea..4...other..specify.)%>%
+  mutate(Procedure=unlist(lapply(procedure_code, get_procedure)))%>%
+  group_by(Procedure,Genus) %>% 
+  summarise(count = n())
+
+d_etiology_grouped$Genus <-factor(d_etiology_grouped$Genus, levels=rev(c("Unknown","Staphylococcus","Streptococcus","Fungus","Other","Cutibacterium","Bacillus","Serratia","Enterobacter","Haemophilus","Klebsiella"  ,"Pseudomonas","Escherichia" )))
+d_etiology_grouped$Procedure <-factor(d_etiology_grouped$Procedure, levels=rev(c("None","Other","Tube","Phaco","IVI")))
+
+ggplot(d_etiology_grouped,aes(x=Procedure,y=count,fill=Genus)) + 
+  geom_bar(position="fill",stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "Etiology")+
+  theme_minimal(base_size = 14)
+
+```
+
+
+
+```{r}
+compute_resistance_frequency = function(df){
+  text = paste(df$resistance, collapse = ";")
+  resistance_count = data_frame(text = text) %>% 
+      unnest_tokens(word, text) %>%    # split words
+      count(word, sort = TRUE)%>%
+      filter(word!="g",word!="na",word!="meningitis")# count occurrences
+  return(resistance_count)
+}
+
+get_genus_resistance = function(g,df){
+  if (g!="Overall"){
+    df = df %>%
+      filter(Genus==g)
+  }
+  n = length(rownames(df))
+  df = compute_resistance_frequency(df)
+  colnames(df) = c("word","count")
+  df = df %>%
+    mutate(perc=count/n, Genus=g)
+  return(df)
+}
+
+
+resistance_data = read.csv(paste0(dir,"/PAcnes/resistance.csv")) 
+resistance_data = resistance_data %>%
+  filter(resistance!="|",!grepl("cornea",tolower(Specimen_Comments)),!grepl("conj",tolower(Specimen_Comments)))%>%
+  distinct(MRN,.keep_all=T)
+d_resistance_genus <- data %>% 
+  filter(Genus!="Unknown")%>%
+  select(MRN,Genus)
+d_resistance_genus = left_join(d_resistance_genus,resistance_data,by=join_by(MRN==MRN))
+overall_resistance_count = get_genus_resistance("Overall",d_resistance_genus)
+staph_reistance_count = get_genus_resistance("Staphylococcus",d_resistance_genus)
+overall_resistance_count = rbind(overall_resistance_count,staph_reistance_count)
+strep_resistance_count = get_genus_resistance("Streptococcus",d_resistance_genus)
+overall_resistance_count = rbind(overall_resistance_count,strep_resistance_count)
+
+overall_resistance_count <- overall_resistance_count %>%
+  filter(perc>0.01)%>%
+  pivot_wider(id_cols = word,names_from =Genus,values_from = perc, values_fill = 0)%>%
+  pivot_longer(cols = !word,names_to = "Genus", values_to="perc")%>%
+  group_by(Genus)%>%
+  mutate(word=fct_reorder(word,perc, .desc=T)) 
+
+
+ggplot(overall_resistance_count, aes(fill=Genus, y=perc, x=word)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("Resistance",label=scales::percent)+
+  labs(x="Antibiotic")+
+  #geom_text(aes(word,label=paste0(round(perc*100,0)), vjust=-0.5), 
+  #          position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+Description of treatments 
+```{r}
+data <- data %>%
+  mutate(d_logmar=LogMAR-logMAR)
+  
+d_tx <-data %>% 
+  distinct(Name,.keep_all=T)%>%
+  select(Name,
+         s_logmar=logMAR,
+         e_logmar=LogMAR,
+         Etiology,
+         time=Time.to.follow.up..blue..followup..90.days.,
+         i_date=initial.presentation.date,
+         i_tx_date=date.of.initial.tx,
+         s_tx_date=date.of.secondary.tx,
+         a_tx_date=date,
+         d_logmar,
+         initial=initial.therapy.1..IOABX.alone...2..IOABx...PPV..3...IOABx...PPV...Pcap..4...IOABx...PPV...Tcap..5...topical.abx..6...systemic.Abx..7...Dexamethasone,
+         secondary=secondary.tx.1..IOABX.alone...2..IOABx...PPV..3...IOABx...PPV...Pcap..4...IOABx...PPV...Tcap..5...topical.abx..6...systemic.Abx..7...Dexamethasone,
+         additional=additional.tx..1..IOABX.alone...2..IOABx...PPV..3...IOABx...PPV...Pcap..4...IOABx...PPV...Tcap..5...topical.abx..6...systemic.Abx..7...Dexamethasone) 
+
+
+n=length(d_tx$Name)
+tx_list = list(IOABX=c("1","2","3","4"),
+               PPV=c("2","3","4"),
+               TABX=c("5"),
+               SABX=c("6"),
+               DEX=c("7"),
+               ENUC=c("evis","enuc"))
+
+get_tx= function(c,num_list){
+  for (n in num_list){
+    if (grepl(n,tolower(c))){
+      return(TRUE)
+    }
+  }
+  return(FALSE)
+}
+
+get_tx_df = function(name,dl.list,time_name,s_logmar.list,d_logmar.list,ppv_date.list,i_date.list,Etiology.list){
+  df = data.frame(matrix(ncol = 9, nrow = 0))
+  colnames(df) <- c("Name","Treatment","Time","Data","s_logmar","d_logmar","Days to PPV","Date of PPV","Etiology")
+  for (i in 1:length(dl.list)){
+    if (dl.list[[i]]==""){
+      next
+    }
+    for (n in names(tx_list)){
+      tx=get_tx(dl.list[[i]],tx_list[[n]])
+      if(tx){
+        if(is.double(ppv_date.list[[i]]) & is.double(i_date.list[[i]])){
+          df[nrow(df) + 1,] = c(name[[i]],n,time_name,tx,s_logmar.list[[i]],d_logmar.list[[i]],ppv_date.list[[i]]-i_date.list[[i]],ppv_date.list[[i]],Etiology.list[[i]])
+        }else{
+          df[nrow(df) + 1,] = c(name[[i]],n,time_name,tx,s_logmar.list[[i]],d_logmar.list[[i]],"None",ppv_date.list[[i]],Etiology.list[[i]])          
+        }
+      }
+    }
+  }
+  return(df)
+}
+d_tx_proc1 = get_tx_df(d_tx$Name,d_tx$initial,"Initial",d_tx$s_logmar,d_tx$d_logmar,d_tx$i_tx_date,d_tx$i_date,d_tx$Etiology)
+d_tx_proc2 = get_tx_df(d_tx$Name,d_tx$secondary,"Secondary",d_tx$s_logmar,d_tx$d_logmar,d_tx$s_tx_date,d_tx$i_date,d_tx$Etiology)
+d_tx_proc3 = get_tx_df(d_tx$Name,d_tx$additional,"Additional",d_tx$s_logmar,d_tx$d_logmar,d_tx$a_tx_date,d_tx$i_date,d_tx$Etiology)
+d_tx_proc = rbind(d_tx_proc1,d_tx_proc2,d_tx_proc3)
+d_tx_proc_sum <- d_tx_proc %>% 
+  group_by(Time,Treatment) %>%
+  summarise(count=n()) %>%
+  mutate(percent=count/n)%>%
+  mutate(Treatment=fct_reorder(Treatment,percent, .desc=T)) 
+
+d_tx_proc_sum$Time <-factor(d_tx_proc_sum$Time, levels=c("Initial","Secondary","Additional"))
+ggplot(d_tx_proc_sum, aes(fill=Time, y=percent, x=Treatment)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("",label=scales::percent)+
+  labs(y = "Percentage")+
+  geom_text(aes(Treatment,label=paste0(round(percent*100,0),"%"), vjust=-0.5), 
+            position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)
+
+d_tx_proc_sum_endog <- d_tx_proc %>%
+  filter(Etiology=="Endogenous")%>%
+  group_by(Time,Treatment) %>%
+  summarise(count=n()) %>%
+  mutate(percent=count/n)%>%
+  mutate(Treatment=fct_reorder(Treatment,percent, .desc=T)) 
+
+d_tx_proc_sum_endog$Time <-factor(d_tx_proc_sum_endog$Time, levels=c("Initial","Secondary","Additional"))  
+  
+ggplot(d_tx_proc_sum_endog, aes(fill=Time, y=percent, x=Treatment)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("",label=scales::percent)+
+  labs(y = "Percentage")+
+  geom_text(aes(Treatment,label=paste0(round(percent*100,0),"%"), vjust=-0.5), 
+            position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)
+
+d_tx_proc_sum_not_endog <- d_tx_proc %>%
+  filter(Etiology!="Endogenous")%>%
+  group_by(Time,Treatment) %>%
+  summarise(count=n()) %>%
+  mutate(percent=count/n)%>%
+  mutate(Treatment=fct_reorder(Treatment,percent, .desc=T)) 
+
+d_tx_proc_sum_not_endog$Time <-factor(d_tx_proc_sum_not_endog$Time, levels=c("Initial","Secondary","Additional"))  
+  
+ggplot(d_tx_proc_sum_not_endog, aes(fill=Time, y=percent, x=Treatment)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("",label=scales::percent)+
+  labs(y = "Percentage")+
+  geom_text(aes(Treatment,label=paste0(round(percent*100,0),"%"), vjust=-0.5), 
+            position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)
+```
+
+Description of visual outcomes
+```{r}
+d_outcome <- data%>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name,s_logmar=logMAR,e_logmar=LogMAR,time=Time.to.follow.up..blue..followup..90.days.,i_date=initial.presentation.date) %>%
+  filter(!(is.na(time))) %>%
+  filter(!(is.na(i_date))) %>%
+  mutate(d_logmar=e_logmar-s_logmar)
+
+ggplot(d_outcome, aes(x=log(time), y=d_logmar)) + 
+  geom_point(aes(colour=d_logmar))+ 
+  geom_smooth(method = "lm",col="black") +
+  scale_color_gradient(low="blue", high="red",name=expression(Delta ~ "log(MAR)"))+
+  labs(x="Time to follow up (log[days])",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)
+
+d_outcome <- data%>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name,s_logmar=logMAR,e_logmar=LogMAR,time=Time.to.follow.up..blue..followup..90.days.,i_date=initial.presentation.date,Procedure) %>%
+  mutate(d_logmar=e_logmar-s_logmar)
+
+ggplot(d_outcome, aes(x=s_logmar, y=d_logmar)) + 
+  geom_jitter(aes(colour=d_logmar),width = 0.05)+ 
+  geom_smooth(method = "lm",col="black") +
+  scale_color_gradient(low="blue", high="red",name=expression(Delta ~ "log(MAR)"))+
+  labs(x="Presenting log(MAR)",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)
+
+ggplot(d_outcome, aes(x=s_logmar, y=d_logmar)) + 
+  geom_jitter(aes(colour=Procedure),width = 0.05)+ 
+  geom_smooth(method = "lm",col="black") +
+  #scale_color_gradient(low="blue", high="red",name=expression(Delta ~ "log(MAR)"))+
+  labs(x="Presenting log(MAR)",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)
+
+d_poor = data%>%
+  filter(d_logmar>0.4)
+```
+
+Describe the outcomes of PPV
+```{r}
+d_ppv = d_tx_proc %>%
+  filter(Treatment=="PPV",!is.na(d_logmar),!is.na(`Days to PPV`),`Days to PPV`>=0)%>%
+  mutate(d_logmar=as.double(d_logmar),`Days to PPV`=as.double(`Days to PPV`))%>%
+  distinct(Name,.keep_all=T)
+
+cor.test(d_ppv$`Days to PPV`,d_ppv$d_logmar,method = "pearson") 
+
+ggplot(d_ppv, aes(x=log(`Days to PPV`+1), y=d_logmar)) + 
+  geom_point(aes(colour=Time))+ 
+  geom_smooth(method = "lm",col="black") +
+  labs(x="Time to PPV (log[days+1])",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)
+
+get_ttppv=function(x){
+  if (x>3){
+    return("late")
+  }else{
+    return(toString(x))
+  }
+}
+
+d_ppv_grouped = d_ppv %>%
+  mutate(ttppv = unlist(lapply(`Days to PPV`, function (x) get_ttppv(x))))
+
+ggplot(d_ppv_grouped, aes(x=ttppv, y=d_logmar,fill=ttppv)) + 
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  labs(x="Time to PPV (days)",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none")  
+
+stratify = function(x){
+  if (x<=0){
+    return("early")
+  }else{
+    return("late")
+  }
+}
+
+d_ppv_strat = d_ppv %>% 
+   mutate(strat=unlist(lapply(`Days to PPV`,stratify)))
+
+d_ppv_stats = d_ppv_strat %>%
+  group_by(strat) %>%
+  summarise( 
+    n=n(),
+    mean=mean(d_logmar),
+    sd=sd(d_logmar)
+  ) %>%
+  mutate( se=sd/sqrt(n))  %>%
+  mutate( ic=se * qt((1-0.05)/2 + .5, n-1))
+
+early = d_ppv_strat %>% filter(strat=="early")
+late = d_ppv_strat %>% filter(strat=="late")
+t.test(early$d_logmar,late$d_logmar)
+
+ggplot(d_ppv_strat, aes(strat,d_logmar,fill=strat)) +
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  #geom_bar(stat="identity")+
+  #geom_errorbar( aes(x=strat, ymin=mean-ic, ymax=mean+ic), size=.3, width=.2,)+
+  xlab("Time of PPV")+
+  scale_fill_hue(name="Time of PPV")+
+  ylab(expression(Delta ~ "log(MAR)")) +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+
+
+d_hist_ivi = d_hist_ivi %>%
+  filter(Genus!="Unknown")
+
+d_ppv_strat = d_ppv_strat%>%
+  mutate(year=format(as.Date(as_datetime(as.integer(`Date of PPV`)), format="%d/%m/%Y"),"%Y"),
+         dow=weekdays(as.Date(as_datetime(as.integer(`Date of PPV`)))))
+
+ggplot(d_ppv_strat, aes(x=year,group=strat,color=strat))+geom_line(stat='count',size = 1.5)+ 
+  labs(x = "Date of PPV",y="Count")+
+  theme_minimal(base_size = 14)+
+  guides(color = guide_legend(title = "Time to PPV"))
+
+d_ppv_strat_perc = d_ppv_strat %>%
+  group_by(year,strat)%>%
+  summarise(count=n())%>%
+  dcast(year~strat, fill=0)%>%
+  mutate(perc=early/(early+late))
+
+ggplot(d_ppv_strat_perc, aes(x=year,y=perc))+geom_bar(stat="identity")+ 
+  labs(x = "Date of PPV",y="Early PPV (%)")+
+  theme_minimal(base_size = 14)
+
+
+ggplot(d_ppv_strat, aes(x=as.integer(s_logmar),fill=strat))+geom_histogram(position="dodge",bins=10)+
+  xlab("Presenting VA (log[MAR])")+
+  ylab("Count") +
+  theme_minimal(base_size = 14)
+
+ggplot(d_ppv_strat, aes(x=strat,y=as.double(s_logmar),fill=strat)) +
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  xlab("Time of PPV")+
+  #scale_fill_hue(name="Time of PPV")+
+  ylab("Initial VA (log[MAR])") +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+```
+```{r}
+d_gage = data%>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name,MRN,Procedure,
+         i_date=initial.presentation.date,
+         ppv1=If.PPV..gauge.of.PPV.0.23G..1.25G..2.27G,
+         ppv2=If.PPV..duration.of.surgery..minutes..1,
+         ppv3=If.PPV..gauge.of.PPV.0.23G..1.25G..2.27G.2)
+  
+ppv_data <- read.csv(paste0(dir,"/PAcnes/ppv_data.csv")) 
+ppv_data_proc <- ppv_data %>%
+  filter(!is.na(MRN))
+ppv_data_proc<-left_join(ppv_data_proc,d_gage, by=join_by(MRN==MRN))
+ppv_data_proc<-left_join(d_ppv,ppv_data_proc, by=join_by(Name==Name))
+
+ppv_data_proc$Report_Date_Time <- unlist(lapply(ppv_data_proc[["Report_Date_Time"]], function (x) anytime(ymd(x))))
+ppv_data_proc=ppv_data_proc %>%
+  mutate(bad=as.Date(as.POSIXct(Report_Date_Time)))%>%
+  filter(!grepl(",",PPV.gauge))%>%
+  filter(Report_Date_Time>=i_date-days(2))%>%
+  distinct(Name,.keep_all=T)
+
+d_ppv_perc <- ppv_data_proc %>% 
+  group_by(PPV.gauge) %>% 
+  summarise(count = n()) %>% 
+  mutate(perc = count/sum(count)) 
+
+ggplot(d_ppv_perc,aes(PPV.gauge,perc,fill=PPV.gauge)) + 
+  geom_bar(stat="identity") + 
+  scale_y_continuous("",label=scales::percent)+
+  labs(x = "PPV Gauge")+
+  geom_text(aes(label=paste0(round(perc*100,1),"%"), vjust=-0.3)) +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none")
+
+d_ppv_strat$dow <-factor(d_ppv_strat$dow, levels=c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"))
+ggplot(d_ppv_strat,aes(x=dow,fill=strat))+
+  geom_bar()+
+  theme_minimal(base_size = 14)+ 
+  labs(x = "Day of Week",fill="Time to PPV")
+
+ggplot(d_ppv_strat,aes(x=dow,fill=strat))+
+  geom_bar(position="fill")+
+  theme_minimal(base_size = 14)+ 
+  labs(x = "Day of Week",fill="Time to PPV")+
+  scale_y_continuous("",label=scales::percent)
+
+```
+
+
+```{r}
+ppv23 = ppv_data_proc %>% filter(PPV.gauge=="23")
+ppv25 = ppv_data_proc %>% filter(PPV.gauge=="25")
+t.test(ppv23$d_logmar,ppv25$d_logmar)
+
+ggplot(ppv_data_proc, aes(PPV.gauge,d_logmar,fill=PPV.gauge)) +
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  #geom_bar(stat="identity")+
+  #geom_errorbar( aes(x=strat, ymin=mean-ic, ymax=mean+ic), size=.3, width=.2,)+
+  xlab("PPV Gauge")+
+  scale_fill_hue(name="PPV Gauge")+
+  ylab(expression(Delta ~ "log(MAR)")) +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+
+
+ppv_data_proc = ppv_data_proc %>%
+  mutate(year=format(as.Date(as_datetime(as.integer(`Date of PPV`)), format="%d/%m/%Y"),"%Y"))
+
+ggplot(ppv_data_proc, aes(x=year,group=PPV.gauge,color=PPV.gauge))+geom_line(stat='count',size = 1.5)+ 
+  labs(x = "Date of presentation",y="Count")+
+  theme_minimal(base_size = 14)
+
+ggplot(ppv_data_proc, aes(x=year,y=d_logmar))+
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  #geom_bar(stat="identity")+
+  #geom_errorbar( aes(x=strat, ymin=mean-ic, ymax=mean+ic), size=.3, width=.2,)+
+  xlab("PPV Gauge")+
+  scale_fill_hue(name="PPV Gauge")+
+  ylab(expression(Delta ~ "log(MAR)")) +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+
+ggplot(ppv_data_proc, aes(x=as.integer(year), y=as.double(d_logmar),color=PPV.gauge)) + 
+  geom_point(aes(color=PPV.gauge))+ 
+  geom_smooth(aes(color=PPV.gauge),method = "nls", formula = y ~ a * x + b, se = F,
+              method.args = list(start = list(a = 0.1, b = 0.1))) +
+  geom_smooth(method = "lm",col="black")  +
+  #scale_color_gradient(low="blue", high="red",name=expression(Delta ~ "log(MAR)"))+
+  scale_x_continuous(breaks=2009:2020)+
+  labs(x="Year of presentation",y = expression(Delta ~ "log(MAR)"))+
+  theme_minimal(base_size = 14)
+
+d_ppv_strat_gauge=left_join(d_ppv_strat,ppv_data_proc, by=join_by(Name==Name))
+d_ppv_strat_gauge = d_ppv_strat_gauge %>% filter(!is.na(PPV.gauge))
+
+ggplot(d_ppv_strat_gauge,aes(x=PPV.gauge,fill=strat))+
+  geom_bar(position="fill")+
+  theme_minimal(base_size = 14)+ 
+  labs(x = "Gauge",fill="Time to PPV")+
+  scale_y_continuous("",label=scales::percent)
+```
+
+```{r}
+
+d_outcomes=data%>%
+  filter(!is.na(d_logmar))
+unique(d_outcomes$d_logmar)
+
+d_outcomes$Procedure <-factor(d_outcomes$Procedure, levels=rev(c("None","Other","Tube","Phaco","IVI")))
+ggplot(d_outcomes, aes(x=Procedure, y=as.double(d_logmar),fill=Procedure)) +
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.5)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  #geom_bar(stat="identity")+
+  #geom_errorbar( aes(x=strat, ymin=mean-ic, ymax=mean+ic), size=.3, width=.2,)+
+  xlab("Etiology")+
+  scale_fill_hue(name="PPV Gauge")+
+  ylab(expression(Delta ~ "log(MAR)")) +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+
+ggplot(d_outcomes, aes(x=Procedure, y=as.double(logMAR),fill=Procedure)) +
+  geom_violin(alpha=0.3)+ 
+  geom_dotplot(binaxis= "y",
+               stackdir = "center",
+               dotsize = 0.3)+
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="errorbar", color="black", width=0.2,size=1)+
+  stat_summary(fun=mean, geom="crossbar", color="black",width=0.3,size=0.5)+
+  #geom_bar(stat="identity")+
+  #geom_errorbar( aes(x=strat, ymin=mean-ic, ymax=mean+ic), size=.3, width=.2,)+
+  xlab("Etiology")+
+  scale_fill_hue(name="PPV Gauge")+
+  ylab("Initial log(MAR)") +
+  theme_minimal(base_size = 14)+ 
+  theme(legend.position = "none") 
+
+#d_outcomes$
+```
+
+
+Regression
+```{r}
+clean_str=function(s){
+  updated_string = gsub(" ", "", s)
+  updated_string = gsub(",$", "", updated_string)
+  return(updated_string)
+}
+
+d_regression = data %>%
+  select(Name,
+         d_logmar,
+         logMAR,
+         race=Race.0.White..1.Black.African.American..2.Asian..3.American.Indian.or.Alaska.Native..4.Native.Hawaiian.or.Other.Pacific.Islander..5.more.than.one.race..6.Other..7.unknown.not.reported,
+         initial=initial.therapy.1..IOABX.alone...2..IOABx...PPV..3...IOABx...PPV...Pcap..4...IOABx...PPV...Tcap..5...topical.abx..6...systemic.Abx..7...Dexamethasone,
+         Genus,
+         Etiology,
+         Procedure,
+         gender=Gender.1.M..2.F,
+         age.at.presentation)%>%
+  filter(!is.na(d_logmar))%>%
+  mutate(initial=unlist(lapply(initial, function(x) clean_str(x))))%>%
+  distinct(Name,.keep_all=T)
+
+fit <- lm(d_logmar~race+Genus+Etiology+gender+initial,data=d_regression)
+summary(fit)$coefficient
+layout(matrix(c(1,2,3,4),2,2))
+plot(fit)
+```
+
+```{r}
+d_demo = data %>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name,
+         logMAR,
+         race=Race.0.White..1.Black.African.American..2.Asian..3.American.Indian.or.Alaska.Native..4.Native.Hawaiian.or.Other.Pacific.Islander..5.more.than.one.race..6.Other..7.unknown.not.reported,
+         initial=initial.therapy.1..IOABX.alone...2..IOABx...PPV..3...IOABx...PPV...Pcap..4...IOABx...PPV...Tcap..5...topical.abx..6...systemic.Abx..7...Dexamethasone,
+         Genus,
+         Etiology,
+         Procedure,
+         gender=Gender.1.M..2.F,
+         age.at.presentation)
+d_ppv_regression= left_join(d_ppv_strat,d_regression, by=join_by(Name==Name))
+d_ppv_regression2= left_join(d_ppv_regression,ppv_data_proc, by=join_by(Name==Name))
+d_ppv_regression2= d_ppv_regression2 %>%
+  filter(!is.na(PPV.gauge))
+fit <- lm(d_logmar.x~race+Genus+Etiology+gender+strat,data=d_ppv_regression)
+fit_gauge <- lm(d_logmar.x~race+Genus+Etiology+gender+strat+PPV.gauge,data=d_ppv_regression2)
+summary(fit)$coefficient
+summary(fit)
+summary(fit_gauge)$coefficient
+summary(fit_gauge)
+write.csv(summary(fit)$coefficient,paste0(dir,"full_model.csv"))
+fit_reduced <- lm(d_logmar.x~race+Genus+Etiology+gender,data=d_ppv_regression)
+anova(fit, fit_reduced)
+fit_bare <- lm(d_logmar.x~strat,data=d_ppv_regression)
+summary(fit_bare)$coefficient
+```
+
+ERM
+```{r}
+get_erm <- function(e){
+  e=tolower(e)
+  if (grepl("erm",e)){
+    return("1")
+  }else
+    return("0")
+}
+
+d_erm<-data %>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name, 
+         erm_i=ERM..1.yes..0.no,
+         erm_12=ERM..1.yes..0.no.1,
+         findings_1=X1.mo.findings,
+         findings_2=X2.mo.findings,
+         findings_3=X3.mo.findings,
+         findings_6=X6.mo.findings)%>%
+  filter(!(erm_12==""&findings_1==""&findings_2==""&findings_3==""&findings_6==""))%>%
+  filter(!erm_i=="1")%>%
+  mutate(findings_1=unlist(lapply(findings_1,get_erm)),
+         findings_2=unlist(lapply(findings_2,get_erm)),
+         findings_3=unlist(lapply(findings_3,get_erm)),
+         findings_6=unlist(lapply(findings_6,get_erm)))
+
+d_erm_ppv = left_join(d_erm,d_ppv_strat,by=join_by(Name==Name))
+d_erm_ppv = d_erm_ppv %>%
+  filter(!is.na(strat))%>%
+  distinct(Name,.keep_all=T)
+
+d_erm_ppv_long = d_erm_ppv %>%
+  pivot_longer(cols=starts_with("findings"),
+               names_to="Month",
+               names_prefix = "findings_",
+               values_to = "ERM")%>%
+  group_by(Month,strat)%>%
+  summarise(erm_ERM=sum(as.integer(ERM)),erm_no=sum(ERM=="0"))%>%
+  mutate(perc=erm_ERM/(erm_ERM+erm_no))
+
+ggplot(d_erm_ppv_long,aes(x=Month,y=perc,fill=strat)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("ERM",label=scales::percent)+
+  labs(x="Time after PPV (months)", fill="Time to PPV")+
+  geom_text(aes(Month,label=paste0(round(perc*100,0),"%"), vjust=-0.5), 
+            position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)
+
+```
+
+```{r}
+get_cme <- function(e){
+  e=tolower(e)
+  if (grepl("cme",e)){
+    return("1")
+  }else
+    return("0")
+}
+
+d_cme<-data %>%
+  distinct(Name,.keep_all=T)%>%
+  select(Name, 
+         cme_i=IRF..1.yes.0.no,
+         cme_12=IRF..1.yes.0.no.1,
+         cme_findings_1=X1.mo.findings,
+         cme_findings_2=X2.mo.findings,
+         cme_findings_3=X3.mo.findings,
+         cme_findings_6=X6.mo.findings)%>%
+  filter(!(cme_12==""&cme_findings_1==""&cme_findings_2==""&cme_findings_3==""&cme_findings_6==""))%>%
+  filter(!cme_i=="1")%>%
+  mutate(cme_findings_1=unlist(lapply(cme_findings_1,get_cme)),
+         cme_findings_2=unlist(lapply(cme_findings_2,get_cme)),
+         cme_findings_3=unlist(lapply(cme_findings_3,get_cme)),
+         cme_findings_6=unlist(lapply(cme_findings_6,get_cme)))
+
+d_cme_ppv = left_join(d_cme,d_ppv_strat,by=join_by(Name==Name))
+d_cme_ppv = d_cme_ppv %>%
+  filter(!is.na(strat))%>%
+  distinct(Name,.keep_all=T)
+
+d_cme_ppv_long = d_cme_ppv %>%
+  pivot_longer(cols=starts_with("cme_findings"),
+               names_to="Month",
+               names_prefix = "cme_findings_",
+               values_to = "CME")%>%
+  group_by(Month,strat)%>%
+  summarise(cme_CME=sum(as.integer(CME)),cme_no=sum(CME=="0"))%>%
+  mutate(perc=cme_CME/(cme_CME+cme_no))
+
+ggplot(d_cme_ppv_long,aes(x=Month,y=perc,fill=strat)) + 
+  geom_bar(position="dodge", stat="identity")+
+  scale_y_continuous("CME",label=scales::percent)+
+  labs(x="Time after PPV (months)", fill="Time to PPV")+
+  geom_text(aes(Month,label=paste0(round(perc*100,0),"%"), vjust=-0.5), 
+            position = position_dodge(width = 1)) +
+  theme_minimal(base_size = 14)
+
+
+```
+```{r}
+d_ppv_regression2= left_join(d_ppv_regression,d_cme, by=join_by(Name==Name))
+d_ppv_regression2= left_join(d_ppv_regression2,d_erm, by=join_by(Name==Name))
+d_ppv_regression2= d_ppv_regression2%>%
+  distinct(Name,.keep_all=T)%>%
+  mutate(cme=if_any(starts_with("cme_findings"),function (x) grepl("1",x)))%>%
+  mutate(erm=if_any(starts_with("findings"),function (x) grepl("1",x)))%>%
+  filter(if_all(contains("findings"),function (x) !is.na(x)))
+
+fit3 <- lm(d_logmar.x+cme+erm~race+Genus+Etiology+gender+strat,data=d_ppv_regression2)
+summary(fit3)$coefficient
+fit4 <- lm(d_logmar.x~race+Genus+Etiology+gender+strat,data=d_ppv_regression2)
+summary(fit4)$coefficient
+
+fit4 <- lm(d_logmar.x~race+Genus+Etiology+Procedure+gender+strat+age.at.presentation+as.double(s_logmar),data=d_ppv_regression2)
+summary(fit4)$coefficient
+summary(fit4)
+
+write.csv(summary(fit4)$coefficient,paste0(dir,"full_model_with_initial_logmar.csv"))
+```
+
+
+```{r}
+d_meei = data %>% 
+  filter(Etiology=="Post-Procedure",!is.na(location.of.cataract.surgery.1...MEEI..2...other))
+d_meei$location.of.cataract.surgery.1...MEEI..2...other <-as.factor(d_meei$location.of.cataract.surgery.1...MEEI..2...other)
+levels(d_meei$location.of.cataract.surgery.1...MEEI..2...other) =c("MEE","Other")
+ggplot(d_meei,aes(x=location.of.cataract.surgery.1...MEEI..2...other))+
+  geom_bar()+
+  xlab("Location of procedure")+
+  theme_minimal(base_size = 14)
+
+d_meei2 = data %>% filter(Etiology=="Post-Procedure",!is.na(location.of.cataract.surgery.1...MEEI..2...other),Procedure=="IVI")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
